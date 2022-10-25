@@ -213,8 +213,8 @@ static bool is_superuser(void);
 static void check_tablespace(void);
 static bool preliminary_checks(char *errbuf, size_t errsize);
 static bool is_requested_relation_exists(char *errbuf, size_t errsize);
-static void repack_all_databases(const char *order_by);
-static bool repack_one_database(const char *order_by, char *errbuf, size_t errsize);
+static void repack_all_databases(const char *order_by, const char *custom_extra_query_string);
+static bool repack_one_database(const char *order_by, const char *custom_extra_query_string, char *errbuf, size_t errsize);
 static void repack_one_table(repack_table *table, const char *order_by);
 static bool repack_table_indexes(PGresult *index_details);
 static bool repack_all_indexes(char *errbuf, size_t errsize);
@@ -245,6 +245,7 @@ static SimpleStringList	parent_table_list = {NULL, NULL};
 static SimpleStringList	table_list = {NULL, NULL};
 static SimpleStringList	schema_list = {NULL, NULL};
 static char				*orderby = NULL;
+static char				*custom_extra_query_string = NULL;
 static char				*tablespace = NULL;
 static bool				moveidx = false;
 static SimpleStringList	r_index = {NULL, NULL};
@@ -275,6 +276,7 @@ static pgut_option options[] =
 	{ 'b', 'n', "no-order", &noorder },
 	{ 'b', 'N', "dry-run", &dryrun },
 	{ 's', 'o', "order-by", &orderby },
+	{ 's', 'u', "custom-extra-query-string", &custom_extra_query_string },
 	{ 's', 's', "tablespace", &tablespace },
 	{ 'b', 'S', "moveidx", &moveidx },
 	{ 'l', 'i', "index", &r_index },
@@ -337,6 +339,9 @@ main(int argc, char *argv[])
 			if (orderby)
 				ereport(WARNING, (errcode(EINVAL),
 					errmsg("option -o (--order-by) has no effect while repacking indexes")));
+			else if (custom_extra_query_string)
+				ereport(WARNING, (errcode(EINVAL),
+					errmsg("option -u (--custom-extra-query-string) has no effect while repacking indexes")));
 			else if (noorder)
 				ereport(WARNING, (errcode(EINVAL),
 					errmsg("option -n (--no-order) has no effect while repacking indexes")));
@@ -381,11 +386,11 @@ main(int argc, char *argv[])
 				ereport(ERROR,
 					(errcode(EINVAL),
 					 errmsg("cannot repack specific schema(s) in all databases")));
-			repack_all_databases(orderby);
+			repack_all_databases(orderby, custom_extra_query_string);
 		}
 		else
 		{
-			if (!repack_one_database(orderby, errbuf, sizeof(errbuf)))
+			if (!repack_one_database(orderby, custom_extra_query_string, errbuf, sizeof(errbuf)))
 				ereport(ERROR,
 					(errcode(ERROR), errmsg("%s failed with error: %s", PROGRAM_NAME, errbuf)));
 		}
@@ -675,7 +680,7 @@ cleanup:
  * Call repack_one_database for each database.
  */
 static void
-repack_all_databases(const char *orderby)
+repack_all_databases(const char *orderby, const char *custom_extra_query_string)
 {
 	PGresult   *result;
 	int			i;
@@ -699,7 +704,7 @@ repack_all_databases(const char *orderby)
 		elog(INFO, "repacking database \"%s\"", dbname);
 		if (!dryrun)
 		{
-			ret = repack_one_database(orderby, errbuf, sizeof(errbuf));
+			ret = repack_one_database(orderby, custom_extra_query_string, errbuf, sizeof(errbuf));
 			if (!ret)
 				elog(INFO, "database \"%s\" skipped: %s", dbname, errbuf);
 		}
@@ -731,7 +736,7 @@ getoid(PGresult *res, int row, int col)
  * Call repack_one_table for the target tables or each table in a database.
  */
 static bool
-repack_one_database(const char *orderby, char *errbuf, size_t errsize)
+repack_one_database(const char *orderby, const char *custom_extra_query_string, char *errbuf, size_t errsize)
 {
 	bool					ret = false;
 	PGresult			   *res = NULL;
@@ -944,8 +949,13 @@ repack_one_database(const char *orderby, char *errbuf, size_t errsize)
 		/* Craft Copy SQL */
 		initStringInfo(&copy_sql);
 		appendStringInfoString(&copy_sql, table.copy_data);
+		if (custom_extra_query_string)
+		{
+			appendStringInfoString(&copy_sql, " ");
+			appendStringInfoString(&copy_sql, custom_extra_query_string);
+			appendStringInfoString(&copy_sql, " ");
+		}
 		if (!orderby)
-
 		{
 			if (ckey != NULL)
 			{
